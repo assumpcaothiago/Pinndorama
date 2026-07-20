@@ -1,0 +1,6 @@
+**/__pycache__/
+build/
+nrpy.egg-info/
+.mypy_cache/
+project/
+.apptainer*/

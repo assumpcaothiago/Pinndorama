@@ -1,0 +1,267 @@
+"""
+Generate C functions for interfacing BSSN applications with initial data importers.
+
+Author: Zachariah B. Etienne
+        zachetie **at** gmail **dot* com
+"""
+
+from inspect import currentframe as cfr
+from types import FrameType as FT
+from typing import Optional, Set, Tuple, Union, cast
+
+import nrpy.c_function as cfc
+import nrpy.helpers.parallel_codegen as pcg
+import nrpy.params as par
+from nrpy.equations.general_relativity.InitialData_Cartesian import (
+    InitialData_Cartesian,
+)
+from nrpy.equations.general_relativity.InitialData_Spherical import (
+    InitialData_Spherical,
+)
+from nrpy.infrastructures import BHaH
+
+
+def register_CFunction_initial_data(
+    IDtype: str,
+    IDCoordSystem: str,
+    ID_persist_struct_str: str,
+    set_of_CoordSystems: Set[str],
+    enable_checkpointing: bool = False,
+    populate_ID_persist_struct_str: str = "",
+    free_ID_persist_struct_str: str = "",
+    enable_T4munu: bool = False,
+    post_ADM_Cart_to_BSSN_Cart_hook_str: str = "",
+    spin_alignment_vector_params: Optional[Tuple[str, str, str]] = None,
+) -> Union[None, pcg.NRPyEnv_type]:
+    """
+    Register C functions for converting ADM initial data to BSSN variables and applying boundary conditions.
+
+    The function performs the following operations:
+    1. Registers the exact ADM initial data function.
+    2. Registers functions for converting ADM initial data to BSSN variables in the specified coordinate systems.
+    3. Generates C code for setting initial data and applying boundary conditions.
+
+    :param set_of_CoordSystems: Set of coordinate systems for ADM->BSSN converters.
+    :param IDtype: The type of initial data.
+    :param IDCoordSystem: The native coordinate system of the initial data.
+    :param enable_checkpointing: Attempt to read from a checkpoint file before generating initial data.
+    :param ID_persist_struct_str: A string representing the persistent structure for the initial data.
+    :param populate_ID_persist_struct_str: Optional string to populate the persistent structure for initial data.
+    :param free_ID_persist_struct_str: Optional string to free the persistent structure for initial data.
+    :param enable_T4munu: Whether to include the stress-energy tensor. Defaults to False.
+    :param post_ADM_Cart_to_BSSN_Cart_hook_str: Optional C code injected after
+        ``ADM_Cart_to_BSSN_Cart(...)`` and before
+        ``BSSN_Cart_to_rescaled_BSSN_rfm(...)``.
+    :param spin_alignment_vector_params: Optional public spin-vector commondata
+        parameter names. Defaults to ``("chi_x", "chi_y", "chi_z")`` for
+        UIUCBlackHole. When set, the aligned UIUC scalar ``chi`` is derived from
+        these components and ADM data are sampled in the aligned frame.
+
+    :raises ValueError: If ``set_of_CoordSystems`` is empty, if
+        ``spin_alignment_vector_params`` is set for an ID type other than
+        UIUCBlackHole, or if it is combined with ``enable_T4munu=True``.
+    :return: None if in registration phase, else the updated NRPy environment.
+    """
+    if IDtype == "UIUCBlackHole" and spin_alignment_vector_params is None:
+        spin_alignment_vector_params = ("chi_x", "chi_y", "chi_z")
+
+    if pcg.pcg_registration_phase():
+        pcg.register_func_call(f"{__name__}.{cast(FT, cfr()).f_code.co_name}", locals())
+        return None
+    parallelization = par.parval_from_str("parallelization")
+    if spin_alignment_vector_params is not None:
+        if IDtype != "UIUCBlackHole":
+            raise ValueError(
+                "spin_alignment_vector_params is currently supported only for UIUCBlackHole."
+            )
+        if enable_T4munu:
+            raise ValueError(
+                "spin_alignment_vector_params does not currently support enable_T4munu=True."
+            )
+        # Register the public spin-vector commondata parameters, then the C helper
+        # that validates them and derives the hidden aligned scalar chi consumed by
+        # the +z-aligned symbolic UIUC equations.
+        par.register_CodeParameters(
+            "REAL",
+            __name__,
+            list(spin_alignment_vector_params),
+            [0.0, 0.0, 0.99],
+            commondata=True,
+        )
+        chi_x_name, chi_y_name, chi_z_name = spin_alignment_vector_params
+        desc = r"""
+Validate public UIUC spin-vector parameters and set hidden scalar chi.
+
+The symbolic UIUC equations remain aligned with +z spin and consume
+``commondata->chi``. This helper derives that scalar from public parfile
+components after parsing and before initial-data setup.
+
+@param[in,out] commondata Commondata structure containing spin components and chi.
+"""
+        cfunc_type = "void"
+        name = "validate_and_set_UIUC_spin_vector"
+        params = "commondata_struct *restrict commondata"
+        body = rf"""
+  const REAL chi_x = commondata->{chi_x_name};
+  const REAL chi_y = commondata->{chi_y_name};
+  const REAL chi_z = commondata->{chi_z_name};
+
+  if (!isfinite((double)chi_x) || !isfinite((double)chi_y) || !isfinite((double)chi_z)) {{
+    fprintf(stderr,
+            "ERROR: UIUC spin vector components must be finite: {chi_x_name}=%.15e {chi_y_name}=%.15e {chi_z_name}=%.15e\n",
+            (double)chi_x, (double)chi_y, (double)chi_z);
+    exit(1);
+  }}
+
+  const REAL chi2 = chi_x * chi_x + chi_y * chi_y + chi_z * chi_z;
+  const REAL chi_norm = sqrt(chi2);
+  if (!isfinite((double)chi_norm)) {{
+    fprintf(stderr,
+            "ERROR: UIUC spin magnitude is not finite: {chi_x_name}=%.15e {chi_y_name}=%.15e {chi_z_name}=%.15e |chi|=%.15e\n",
+            (double)chi_x, (double)chi_y, (double)chi_z, (double)chi_norm);
+    exit(1);
+  }}
+  if (!(chi2 < 1.0)) {{
+    fprintf(stderr,
+            "ERROR: UIUC spin vector must satisfy |chi| < 1: {chi_x_name}=%.15e {chi_y_name}=%.15e {chi_z_name}=%.15e |chi|=%.15e\n",
+            (double)chi_x, (double)chi_y, (double)chi_z, (double)chi_norm);
+    exit(1);
+  }}
+
+  commondata->chi = chi_norm;
+"""
+        cfc.register_CFunction(
+            includes=["BHaH_defines.h"],
+            desc=desc,
+            cfunc_type=cfunc_type,
+            name=name,
+            params=params,
+            include_CodeParameters_h=False,
+            body=body,
+        )
+
+    includes = ["BHaH_defines.h", "BHaH_function_prototypes.h"]
+
+    try:
+        ID: Union[InitialData_Cartesian, InitialData_Spherical]
+        if IDCoordSystem == "Cartesian":
+            ID = InitialData_Cartesian(IDtype=IDtype)
+        else:
+            ID = InitialData_Spherical(IDtype=IDtype)
+
+        BHaH.general_relativity.ADM_Initial_Data_Reader__BSSN_Converter.register_CFunction_exact_ADM_ID_function(
+            IDCoordSystem,
+            IDtype,
+            ID.alpha,
+            ID.betaU,
+            ID.BU,
+            ID.gammaDD,
+            ID.KDD,
+        )
+    except (ValueError, RuntimeError):
+        print(
+            f"Warning: {IDtype} does not correspond to an implemented exact initial data type."
+        )
+        print("Assuming initial data functionality is implemented elsewhere.")
+
+    coord_systems_to_register = set(set_of_CoordSystems)
+    if not coord_systems_to_register:
+        raise ValueError("set_of_CoordSystems must be non-empty.")
+
+    BHaH.general_relativity.ADM_Initial_Data_Reader__BSSN_Converter.register_CFunctions_initial_data_reader__convert_ADM_Sph_or_Cart_to_BSSN(
+        set_of_CoordSystems=coord_systems_to_register,
+        IDCoordSystem=IDCoordSystem,
+        ID_persist_struct_str=ID_persist_struct_str,
+        enable_T4munu=enable_T4munu,
+        post_ADM_Cart_to_BSSN_Cart_hook_str=post_ADM_Cart_to_BSSN_Cart_hook_str,
+        spin_alignment_vector_params=spin_alignment_vector_params,
+    )
+    for coord in sorted(coord_systems_to_register):
+        if coord.startswith("GeneralRFM"):
+            BHaH.generalrfm_precompute.register_CFunctions_generalrfm_support(coord)
+
+    desc = "Set initial data."
+    cfunc_type = "void"
+    name = "initial_data"
+    params = (
+        "commondata_struct *restrict commondata, griddata_struct *restrict griddata_host, griddata_struct *restrict griddata"
+        if parallelization in ["cuda"]
+        else "commondata_struct *restrict commondata, griddata_struct *restrict griddata"
+    )
+
+    body = ""
+    spin_vector_validation_call = (
+        "validate_and_set_UIUC_spin_vector(commondata);\n"
+        if spin_alignment_vector_params is not None
+        else ""
+    )
+    host_griddata = "griddata_host" if parallelization in ["cuda"] else "griddata"
+    if enable_checkpointing:
+        checkpoint_read_call = (
+            "read_checkpoint(commondata, griddata_host, griddata)"
+            if parallelization in ["cuda"]
+            else "read_checkpoint(commondata, griddata)"
+        )
+        restart_body = """
+// Attempt to read checkpoint file. If it doesn't exist, then continue. Otherwise rebuild omitted restart points and return.
+if( CHECKPOINT_READ_CALL ) {
+  SPIN_VECTOR_VALIDATION_CALL
+  for(int grid=0; grid<commondata->NUMGRIDS; grid++) {
+    if (griddata[grid].bcstruct.bc_info.num_inner_boundary_points > 0)
+      apply_bcs_inner_only(commondata, &griddata[grid].params, &griddata[grid].bcstruct, griddata[grid].gridfuncs.y_n_gfs);
+  }
+"""
+        if "interpatch_interpolation_evol_gfs_driver" in cfc.CFunction_dict:
+            restart_body += """
+  if (commondata->num_src_dst_pairs > 0)
+    interpatch_interpolation_evol_gfs_driver(commondata, griddata);
+"""
+        restart_body += """  return;
+}
+"""
+        body += restart_body.replace(
+            "CHECKPOINT_READ_CALL", checkpoint_read_call
+        ).replace(
+            "\n  SPIN_VECTOR_VALIDATION_CALL",
+            (
+                "\n  " + spin_vector_validation_call.rstrip()
+                if spin_vector_validation_call
+                else ""
+            ),
+        )
+    body += spin_vector_validation_call
+    body += "ID_persist_struct ID_persist;\n"
+    if populate_ID_persist_struct_str:
+        body += populate_ID_persist_struct_str
+    body += """
+for(int grid=0; grid<commondata->NUMGRIDS; grid++) {
+  // Unpack griddata struct:
+  params_struct *restrict params = &griddata[grid].params;
+"""
+    if any(coord.startswith("GeneralRFM") for coord in coord_systems_to_register):
+        body += f"  generalrfm_precompute(commondata, params, (const REAL *restrict *) {host_griddata}[grid].xx, {host_griddata}[grid].gridfuncs.auxevol_gfs);\n"
+    body += (
+        f"initial_data_reader__convert_ADM_{IDCoordSystem}_to_BSSN(commondata, params,"
+        f"(const REAL *restrict *) {host_griddata}[grid].xx, (const REAL *restrict *) griddata[grid].xx,"
+        f"&griddata[grid].bcstruct, &{host_griddata}[grid].gridfuncs, &griddata[grid].gridfuncs, &ID_persist, {IDtype});"
+        if parallelization in ["cuda"]
+        else f"initial_data_reader__convert_ADM_{IDCoordSystem}_to_BSSN(commondata, params,"
+        f"(const REAL *restrict *) {host_griddata}[grid].xx, &griddata[grid].bcstruct, &griddata[grid].gridfuncs, &ID_persist, {IDtype});"
+    )
+    body += """
+  apply_bcs_outerextrap_and_inner(commondata, params, &griddata[grid].bcstruct, griddata[grid].gridfuncs.y_n_gfs);
+}
+"""
+    if free_ID_persist_struct_str:
+        body += free_ID_persist_struct_str
+
+    cfc.register_CFunction(
+        includes=includes,
+        desc=desc,
+        cfunc_type=cfunc_type,
+        name=name,
+        params=params,
+        include_CodeParameters_h=False,
+        body=body,
+    )
+    return pcg.NRPyEnv()

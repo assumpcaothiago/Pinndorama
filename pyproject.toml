@@ -1,0 +1,44 @@
+[build-system]
+requires = ["setuptools>=69,<81"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "pinndorama"
+version = "0.1.0"
+description = "Publication-facing PINN solvers for elliptic PDEs in native SinhSymTP coordinates"
+readme = "README.md"
+requires-python = ">=3.11,<3.13"
+license = {text = "See component license and provenance files"}
+dependencies = [
+  "appdirs>=1.4.4,<2",
+  "jax>=0.4.38,<0.7",
+  "optax>=0.2.3,<0.3",
+  "equinox>=0.11.11,<0.13",
+  "lineax>=0.0.6,<0.1",
+  "jaxtyping>=0.2.24,<0.3",
+  "numpy>=1.26,<3",
+  "sympy>=1.13,<2",
+  "matplotlib>=3.8,<4",
+  "black==26.5.1",
+]
+
+[project.optional-dependencies]
+test = [
+  "pytest>=8,<9",
+]
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]
+include = ["pinndorama*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
+addopts = "-ra"
+markers = [
+  "jax: requires the bounded JAX scientific stack",
+  "slow: exercises a compiler or optimizer smoke test",
+]

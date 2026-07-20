@@ -1,0 +1,63 @@
+schema_version = 2
+name = "C002 2D 384x192 w60d10"
+dtype = "float64"
+
+[geometry]
+coordinate_system = "SinhSymTP"
+AMAX = 1.0e6
+bScale = 2.5
+SINHWAA = 0.07
+
+[physics]
+bare_mass_0 = 0.5
+bare_mass_1 = 0.5
+zPunc = 2.5
+P0_x = 0.0
+P0_y = 0.0
+P0_z = 0.0
+P1_x = 0.0
+P1_y = 0.0
+P1_z = 0.0
+S0_x = 0.0
+S0_y = 0.0
+S0_z = 0.2
+S1_x = 0.0
+S1_y = 0.0
+S1_z = -0.15
+
+[architecture]
+layers = [2, 60, 60, 60, 60, 60, 60, 60, 60, 60, 60, 1]
+activation = "tanh"
+initialization = "he"
+
+[ansatz]
+output_transform = "smooth_inverse_radius"
+
+[loss]
+interior_residual = "divergence_form_J_R_H"
+interior_weight = 1.0
+theta_parity_weight = 1.0
+outer_robin_weight = 1.0
+outer_robin_scale = "one_plus_r"
+
+[collocation]
+sampling = "cell_centered"
+Nxx0 = 384
+Nxx1 = 192
+xx0_min = 0.0
+xx0_max = 1.0
+xx1_min = 0.0
+xx1_max = 3.141592653589793
+xx1_parity_delta_max = 0.1
+
+[training]
+seed = 503
+adam_steps = 1500
+adam_learning_rate = 1.0e-4
+adam_min_learning_rate = 1.0e-7
+gradient_clip = 1.0
+ssbroyden_steps = 50000
+ssbroyden_rtol = 1.0e-12
+ssbroyden_atol = 1.0e-12
+log_every = 100
+checkpoint_every = 1000

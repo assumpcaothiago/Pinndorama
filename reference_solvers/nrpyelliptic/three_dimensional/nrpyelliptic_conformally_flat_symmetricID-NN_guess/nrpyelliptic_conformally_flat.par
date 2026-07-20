@@ -1,0 +1,51 @@
+#### nrpyelliptic_conformally_flat BH@H parameter file. NOTE: only commondata CodeParameters appear here ###
+initial_guess = "zero"            # zero | parametric_nn
+###########################
+###########################
+### Module: nrpy.equations.nrpyelliptic.CommonParams
+MINIMUM_GLOBAL_WAVESPEED = 0.7    # (REAL)
+P0_x = 0.0                        # (REAL)
+P0_y = 0.0                        # (REAL)
+P0_z = 0.0                        # (REAL)
+P1_x = 0.0                        # (REAL)
+P1_y = 0.0                        # (REAL)
+P1_z = 0.0                        # (REAL)
+S0_x = 0.0                        # (REAL)
+S0_y = 0.0                        # (REAL)
+S0_z = 0.1                        # (REAL)
+S1_x = 0.0                        # (REAL)
+S1_y = 0.0                        # (REAL)
+S1_z = 0.1                        # (REAL), equal raw Bowen-York S_z
+bare_mass_0 = 0.5                 # (REAL)
+bare_mass_1 = 0.5                 # (REAL)
+eta_damping = 70.0                # (REAL)
+zPunc = 2.5                       # (REAL)
+###########################
+###########################
+### Module: nrpy.infrastructures.BHaH.CurviBoundaryConditions.CurviBoundaryConditions
+outer_bc_type = "radiation"       # (char[50])
+###########################
+###########################
+### Module: nrpy.infrastructures.BHaH.MoLtimestepping.MoL_register_all
+CFL_FACTOR = 1.0                  # (REAL)
+t_final = 1000000.0               # (REAL)
+###########################
+###########################
+### Module: nrpy.infrastructures.BHaH.checkpointing
+checkpoint_every = 50.0           # (REAL)
+###########################
+###########################
+### Module: nrpy.infrastructures.BHaH.diagnostics.progress_indicator
+output_progress_every = 1         # (int)
+###########################
+###########################
+### Module: nrpy.infrastructures.BHaH.nrpyelliptic.diagnostics
+diagnostics_output_every = 1000    # (int)
+log10_current_residual = 1.0      # (REAL)
+log10_residual_tolerance = -15.1  # (REAL)
+nn_max = 20000                    # (int)
+stop_relaxation = False           # (bool)
+###########################
+###########################
+### Module: nrpy.infrastructures.BHaH.numerical_grids_and_timestep
+convergence_factor = 1.0          # (REAL)

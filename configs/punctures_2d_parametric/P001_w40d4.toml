@@ -1,0 +1,73 @@
+schema_version = 2
+name = "P001_parametric_2d_w40d4"
+dtype = "float64"
+seed = 503
+
+[geometry]
+coordinate_system = "SinhSymTP"
+AMAX = 1.0e6
+bScale = 2.5
+SINHWAA = 0.07
+
+[physics]
+bare_mass_0 = 0.5
+bare_mass_1 = 0.5
+zPunc = 2.5
+P0_x = 0.0
+P0_y = 0.0
+P0_z = 0.0
+P1_x = 0.0
+P1_y = 0.0
+P1_z = 0.0
+S0_x = 0.0
+S0_y = 0.0
+S1_x = 0.0
+S1_y = 0.0
+
+[parameter.equal_spin_sz]
+minimum = -0.2
+maximum = 0.2
+sampling = "cell_centered"
+
+[domain]
+xx0_min = 9.0e-4
+xx0_max = 1.0
+xx1_min = 1.0e-5
+xx1_max = 3.141582653589793
+xx1_parity_delta_max = 0.1
+
+[collocation]
+Nxx0 = 128
+Nxx1 = 64
+equal_spin_sz_points = 80
+
+[architecture]
+layers = [3, 40, 40, 40, 40, 1]
+activation = "tanh"
+initialization = "he"
+
+[ansatz]
+output_transform = "smooth_inverse_radius"
+
+[loss]
+residual = "J_R_H"
+residual_weight = 1.0
+regularized_residual_scale = 1.0
+theta_parity_weight = 1.0
+outer_robin_weight = 1.0
+outer_robin_scale = "one_plus_r"
+
+[training.adam]
+steps = 1500
+learning_rate = 1.0e-4
+min_learning_rate = 1.0e-7
+gradient_clip = 1.0
+log_every = 100
+checkpoint_every = 1000
+
+[training.ssbroyden]
+steps = 50000
+rtol = 1.0e-12
+atol = 1.0e-12
+log_every = 100
+checkpoint_every = 1000

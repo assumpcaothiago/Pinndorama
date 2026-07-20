@@ -1,0 +1,51 @@
+# Python bytecode/cache
+__pycache__/
+**/__pycache__/
+*.py[cod]
+
+# Local environment files
+.venv/
+venv/
+venv_*/
+*.egg-info/
+
+# OS/editor artifacts
+.DS_Store
+
+# Generated build and diagnostic files
+*.pdf
+*.png
+*.tsv
+*.npz
+*.o
+*.txt
+*.dat
+*.bin
+loss_report*.json
+*_loss_report.json
+/NRPyElliptic_2d_C_codes/nrpyelliptic_conformally_flat/nrpyelliptic_conformally_flat
+/NRPyElliptic_3d_C_codes/nrpyelliptic_conformally_flat/nrpyelliptic_conformally_flat
+/NRPyElliptic_3d_C_codes/READER_nrpyelliptic_conformally_flat/nrpyell_reader
+/NRPyElliptic_3d_C_codes/nrpyelliptic_conformally_flat_symmetricID-NN_guess/nrpyelliptic_conformally_flat
+
+# Training outputs and checkpoints
+pinndorama_1d_outputs/
+pinndorama_1d_outputs_*/
+legacy_1d_code/pinn_model*.pth
+*.pt
+*.pth
+*.log
+
+# Generated plots and figures
+legacy_1d_code/predicted_solution.png
+predicted_solution*.png
+*_plot.png
+uu_vs_z*.png
+uu_relative_error_vs_z*.png
+relative_error_*.csv
+relative_error_*.png
+benchark_test/
+
+# Tooling caches
+.pytest_cache/
+.mypy_cache/

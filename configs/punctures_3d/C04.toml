@@ -1,0 +1,70 @@
+schema_version = 2
+name = "C04"
+dtype = "float64"
+
+[geometry]
+AMAX = 1.0e6
+bScale = 5.0
+SINHWAA = 0.07
+
+[physics]
+model = "bowen_york_two_punctures_z_axis"
+residual = "divergence_form_regularized_j_times_r_h"
+bare_mass_0 = 0.5184199353358704
+bare_mass_1 = 0.39193567996522616
+zPunc = 5.0
+P0_x = 0.09530152296974252
+P0_y = 0.0
+P0_z = -0.00084541526517121
+P1_x = -0.09530152296974252
+P1_y = 0.0
+P1_z = 0.00084541526517121
+S0_x = 0.0
+S0_y = 0.09509112426035504
+S0_z = 0.0
+S1_x = 0.0
+S1_y = -0.09156449704142013
+S1_z = 0.0
+theta_axis_regularity_weight = 1.0
+phi_periodicity_weight = 1.0
+outer_robin_weight = 1.0
+outer_robin_scale = "one_plus_r"
+
+[architecture]
+layers = [3, 40, 40, 40, 40, 1]
+activation = "tanh"
+initialization = "he"
+
+[ansatz]
+output_transform = "smooth_inverse_radius"
+
+[collocation]
+Nxx0 = 256
+Nxx1 = 256
+Nxx2 = 16
+xx0_sampling = "uniform"
+xx0_min = 0.0
+xx0_max = 1.0
+xx1_min = 0.0
+xx1_max = 3.141592653589793
+xx2_min = -3.141592653589793
+xx2_max = 3.141592653589793
+boundary_xx0_min = 9.0e-4
+boundary_xx1_epsilon = 1.0e-5
+xx1_axis_delta_min = 1.0e-5
+xx1_axis_delta_max = 0.1
+
+[training]
+seed = 503
+adam_steps = 10000
+learning_rate = 1.0e-3
+min_learning_rate = 1.0e-7
+gradient_clip_value = 1.0
+ssbroyden_steps = 50000
+ssbroyden_rtol = 1.0e-12
+ssbroyden_atol = 1.0e-12
+log_every = 100
+checkpoint_every = 1000
+
+[continuation]
+require_resume = false

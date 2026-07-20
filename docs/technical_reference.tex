@@ -1,0 +1,978 @@
+\documentclass[11pt]{article}
+
+\usepackage[T1]{fontenc}
+\usepackage[utf8]{inputenc}
+\usepackage{amsmath}
+\usepackage{amssymb}
+\usepackage{array}
+\usepackage{booktabs}
+\usepackage{enumitem}
+\usepackage[margin=1in]{geometry}
+\usepackage{hyperref}
+\usepackage{listings}
+\usepackage{xcolor}
+
+\definecolor{codebackground}{RGB}{246,247,249}
+\definecolor{codeframe}{RGB}{210,214,220}
+\definecolor{linkblue}{RGB}{25,82,135}
+
+\hypersetup{
+  colorlinks=true,
+  linkcolor=linkblue,
+  citecolor=linkblue,
+  urlcolor=linkblue,
+  pdftitle={Pinndorama Solver Architecture and Numerical Implementation},
+  pdfauthor={Pinndorama contributors}
+}
+
+\lstdefinestyle{pinndorama}{
+  basicstyle=\ttfamily\small,
+  backgroundcolor=\color{codebackground},
+  frame=single,
+  rulecolor=\color{codeframe},
+  columns=fullflexible,
+  keepspaces=true,
+  showstringspaces=false,
+  breaklines=true,
+  upquote=true
+}
+\lstset{style=pinndorama}
+
+\newcommand{\code}[1]{\texttt{\detokenize{#1}}}
+\newcommand{\mean}{\operatorname{mean}}
+\newcommand{\JRH}{J R_H}
+\newcommand{\dd}{\mathrm{d}}
+
+\title{Pinndorama Solver Architecture and Numerical Implementation}
+\author{Pinndorama contributors}
+\date{July 2026}
+
+\begin{document}
+
+\maketitle
+
+\begin{abstract}
+Pinndorama is a collection of physics-informed neural-network solvers for
+nonlinear elliptic equations.  It contains a one-dimensional manufactured
+spherical problem and three conformally flat binary-puncture applications:
+fixed axisymmetric, equal-spin parametric axisymmetric, and fully
+three-dimensional.  This document describes the active implementation as a
+technical reference.  It connects the common package structure to the
+mathematical residuals, boundary losses, collocation rules, optimizers,
+checkpoint format, evaluation tools, and vendored dependencies.  It documents
+what the code computes; it does not introduce accuracy, convergence, or
+performance claims, and no trained checkpoints or numerical results are
+assumed to be present.
+\end{abstract}
+
+\tableofcontents
+
+\section{Purpose and scope}
+
+The installable Python sources live under
+\path{src/pinndorama}.  Four solver packages are maintained independently:
+
+\begin{itemize}[nosep]
+  \item \path{solvers/toy_problem_1d}: a non-parametric spherical manufactured
+        problem with configurable outer boundary treatment;
+  \item \path{solvers/punctures_2d}: a fixed-physics axisymmetric puncture
+        solver;
+  \item \path{solvers/punctures_2d_parametric}: an axisymmetric puncture solver
+        whose third input is a physical equal-spin parameter; and
+  \item \path{solvers/punctures_3d}: the full three-dimensional puncture
+        solver.
+\end{itemize}
+
+The packages deliberately do not inherit from a shared solver class.  They
+have parallel organization and share numerical conventions, but each retains
+its own configuration validation, model, loss, optimizer adapter, checkpoint
+code, and evaluator.  This keeps the scientific inputs to each application
+explicit.  Shared repository resources are resolved centrally by
+\path{src/pinndorama/_paths.py}; the shared SSBroyden loader is
+\path{src/pinndorama/_ssbroyden.py}.
+
+Throughout the code, \code{xx0}, \code{xx1}, and \code{xx2} denote native
+curvilinear coordinates.  Their collocation counts are \code{Nxx0},
+\code{Nxx1}, and \code{Nxx2}.  These are PINN sample counts, not
+finite-difference dimensions, and they contain no ghost zones.  Physical
+coordinates are denoted by $(x,y,z)$ or by spherical $(r,\vartheta,\varphi)$.
+
+\section{Package organization and common data flow}
+
+\subsection{Directory structure}
+
+The solver subtree has the following conceptual structure.  Files shown in
+the common column occur in every solver; the final group records
+application-specific additions.
+
+\begin{lstlisting}
+src/pinndorama/
+|-- _paths.py                 repository resource locations
+|-- _ssbroyden.py             shared authenticated optimizer loader
+|-- reproducibility/          dispatch, reference metadata, comparisons
+`-- solvers/
+    |-- toy_problem_1d/
+    |-- punctures_2d/
+    |-- punctures_2d_parametric/
+    `-- punctures_3d/
+
+Each solver package:
+    config.py                  strict TOML schema and effective settings
+    coordinates.py             maps and collocation/boundary samples
+    model.py                   float64 MLP and output transform
+    loss.py                    automatic derivatives and total objective
+    train.py                   Adam, SSBroyden, logging, checkpoints
+    ssbroyden_trainer.py       full-loss adapter to the shared runtime
+    checkpoint.py              atomic versioned NPZ persistence
+    evaluate.py                explicit checkpoint evaluation
+
+Puncture packages additionally:
+    nrpy_expression_builder.py symbolic reference metric and source setup
+    generated_expressions.py   cached NumPy/JAX numerical callables
+
+The 1D package additionally:
+    equation.py                manufactured equation and exact solution
+    plot_error.py              explicit evaluation-table error plot
+\end{lstlisting}
+
+The root \path{configs/} directory contains explicit TOML inputs grouped by
+solver name.  The Python package does not silently select a default research
+configuration.  The standalone C applications under
+\path{reference_solvers/nrpyelliptic/} are not installed as Python modules.
+Pinned third-party sources live under \path{vendor/}.
+
+\subsection{End-to-end data flow}
+
+A training run follows the same broad sequence in all four packages:
+
+\begin{enumerate}
+  \item Parse and strictly validate a user-supplied TOML file.  Apply only the
+        supported command-line overrides for collocation counts, seed, and
+        optimizer-stage lengths.
+  \item Construct cell-centered interior collocation points and separate,
+        structured samples for each boundary or regularity term.
+  \item Construct coordinate quantities.  For puncture problems, build cached
+        NRPy/SymPy expressions and precompute the fixed background and
+        Bowen--York source arrays on the interior samples.
+  \item Initialize or resume a float64 multilayer perceptron (MLP).
+  \item Use JAX automatic differentiation to obtain the first and diagonal
+        second derivatives of the network output in native coordinates.
+  \item Evaluate the mean-square interior residual and the independent
+        boundary losses, then form their configured weighted sum.
+  \item Apply an Optax Adam warm-up followed by the shared, vendored
+        SSBroyden quasi-Newton refinement.
+  \item Write periodic and final atomic NPZ checkpoints with JSON metadata.
+        Evaluation later loads an explicit checkpoint and an explicit
+        coordinate file; no run directory is searched implicitly.
+\end{enumerate}
+
+Fixed-shape interior and boundary arrays are constructed before JIT
+compilation.  Network evaluation, differentiation, loss assembly, and Adam
+steps use JAX arrays.  Scalar residual functions are vectorized with
+\code{jax.vmap}; repeated call graphs are compiled with \code{jax.jit} or the
+Equinox filtered JIT used by the Optimistix wrapper.
+
+\subsection{Configuration-first interface}
+
+The canonical training interface is
+
+\begin{lstlisting}[language=bash]
+python -m pinndorama.solvers.<solver>.train \
+  --config CONFIG.toml --output-dir OUTPUT_DIR \
+  [--resume-checkpoint CHECKPOINT.npz]
+\end{lstlisting}
+
+The command line may override native resolution, the random seed, Adam
+length, and SSBroyden length.  Physics, coordinate geometry, architecture,
+activation, output ansatz, loss operators, boundary sampling policy,
+optimizer tolerances, and learning rates remain in TOML.  Configuration keys
+are validated exactly; old or unknown names are not translated silently.
+
+\section{Common neural-network representation}
+
+\subsection{MLP definition}
+
+Let $q\in\mathbb{R}^{n_{\rm in}}$ be the model input.  With $L$ dense layers,
+the code evaluates
+\begin{align}
+  h^{(0)} &= q,\\
+  h^{(\ell)} &= \tanh\!\left(W^{(\ell)}h^{(\ell-1)}+b^{(\ell)}\right),
+       &&1\leq \ell<L,\\
+  f_{\rm raw}(q) &= W^{(L)}h^{(L-1)}+b^{(L)}.
+\end{align}
+The output layer is linear and scalar.  Dense weights are stored in Equinox
+layout, $(n_{\rm out},n_{\rm in})$, even though the forward pass is written
+as a row-major batch product with $W^{T}$.  Checked configurations use He
+initialization,
+\begin{equation}
+  W_{ij}^{(\ell)}\sim
+  \mathcal{N}\!\left(0,\frac{2}{n_{\rm in}^{(\ell)}}\right),
+  \qquad b_i^{(\ell)}=0,
+\end{equation}
+and enable JAX 64-bit mode before creating parameters or evaluating losses.
+
+The usual \code{w40d4} architecture has four hidden layers of width 40:
+\begin{equation}
+  [n_{\rm in},40,40,40,40,1].
+\end{equation}
+The fixed 2D family also contains a checked \code{w60d10} architecture with
+ten hidden layers of width 60.
+
+\subsection{Smooth inverse-radius ansatz}
+
+All solvers turn the raw output into the trained field using
+\begin{equation}
+  u(q)=\frac{f_{\rm raw}(q)}{\sqrt{1+r(q)^2}}.
+  \label{eq:output-transform}
+\end{equation}
+This transform supplies smooth behavior at finite $r$ and an inverse-radius
+falloff at large radius without fixing the leading asymptotic coefficient.
+Boundary losses still constrain derivatives and asymptotic structure; the
+ansatz does not make those losses identically zero.
+
+The model inputs are
+\begin{center}
+\begin{tabular}{lll}
+\toprule
+Solver & Input vector & Input dimension \\
+\midrule
+1D toy & $(xx0)$ & 1 \\
+Fixed 2D & $(xx0,xx1)$ & 2 \\
+Parametric 2D & $(xx0,xx1,\texttt{equal\_spin\_sz})$ & 3 \\
+Full 3D & $(xx0,xx1,xx2)$ & 3 \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+The mass $m$ in the toy problem is configuration-selected physics and is not
+a network input.  Conversely, \code{equal_spin_sz} is deliberately an input
+to the parametric network.
+
+\section{Native coordinate systems}
+
+\subsection{SinhSpherical map for the 1D solver}
+
+The toy solver directly implements the NRPy SinhSpherical radial map
+\begin{equation}
+ r(xx0)=\mathrm{AMPL}\,
+ \frac{\sinh(xx0/\mathrm{SINHW})}{\sinh(1/\mathrm{SINHW})},
+ \qquad 0\leq xx0\leq1.
+ \label{eq:sinh-spherical}
+\end{equation}
+The analytic map derivatives are
+\begin{align}
+ r_{,0} &=
+ \frac{\mathrm{AMPL}}{\mathrm{SINHW}\sinh(1/\mathrm{SINHW})}
+ \cosh(xx0/\mathrm{SINHW}),\\
+ r_{,00} &=%
+ \frac{\mathrm{AMPL}}{\mathrm{SINHW}^{2}\sinh(1/\mathrm{SINHW})}
+ \sinh(xx0/\mathrm{SINHW}).
+\end{align}
+JAX differentiates $u$ with respect to $xx0$; the code then computes
+\begin{equation}
+ u_r=\frac{u_{,0}}{r_{,0}},\qquad
+ u_{rr}=\frac{u_{,00}}{r_{,0}^{2}}
+         -\frac{u_{,0}r_{,00}}{r_{,0}^{3}}.
+ \label{eq:radial-chain-rule}
+\end{equation}
+
+\subsection{SinhSymTP map for the puncture solvers}
+
+For the puncture applications, define
+\begin{equation}
+ A(xx0)=\mathrm{AMAX}\,
+ \frac{\sinh(xx0/\mathrm{SINHWAA})}
+      {\sinh(1/\mathrm{SINHWAA})}.
+\end{equation}
+With $b=\texttt{bScale}$, the native-to-Cartesian map is
+\begin{align}
+ x &= A\sin(xx1)\cos(xx2),\\
+ y &= A\sin(xx1)\sin(xx2),\\
+ z &= \sqrt{A^2+b^2}\cos(xx1).
+ \label{eq:sinh-symtp-cart}
+\end{align}
+The spherical radius used in the output transform and Robin term is
+\begin{equation}
+ r=\sqrt{A^2+b^2\cos^2(xx1)}.
+\end{equation}
+SinhSymTP is orthogonal.  The implemented reference-metric scale factors are
+\begin{align}
+ h_0 &= A_{,0}
+       \frac{\sqrt{A^2+b^2\sin^2(xx1)}}{\sqrt{A^2+b^2}},\\
+ h_1 &= \sqrt{A^2+b^2\sin^2(xx1)},\\
+ h_2 &= A\sin(xx1),
+\end{align}
+so
+\begin{equation}
+ J=\sqrt{\det\hat\gamma}=h_0h_1h_2,
+ \qquad \hat\gamma^{ii}=h_i^{-2}.
+ \label{eq:sinh-symtp-jacobian}
+\end{equation}
+
+The outer condition needs $u_r$ at fixed spherical polar angle, not simply a
+native $xx0$ derivative.  The coordinate modules analytically form the
+Jacobian of $(r,\vartheta)$ with respect to $(xx0,xx1)$ and invert the
+two-dimensional gradient transformation:
+\begin{equation}
+ u_r=
+ \frac{u_{,0}\vartheta_{,1}-\vartheta_{,0}u_{,1}}
+      {r_{,0}\vartheta_{,1}-\vartheta_{,0}r_{,1}}.
+ \label{eq:spherical-radial-derivative}
+\end{equation}
+The $xx2$ derivative does not enter this transformation because $r$ and
+$\vartheta$ are independent of azimuth.
+
+\section{Puncture Hamiltonian residual}
+
+\subsection{Equation and source fields}
+
+The three puncture solvers represent a correction $u$ to the singular
+conformal-factor background $\psi_{\rm bg}$.  In the notation exposed by the
+NRPy source builder, define
+\begin{equation}
+ \mathcal{A}=\texttt{ADD\_times\_AUU}.
+\end{equation}
+The conformally flat Hamiltonian residual is
+\begin{equation}
+ R_H=\hat\nabla^2u+
+ \frac{\mathcal{A}}{8}(\psi_{\rm bg}+u)^{-7}.
+ \label{eq:hamiltonian-residual}
+\end{equation}
+The bare masses, momenta, spins, and z-axis separation \code{zPunc} select the
+Bowen--York two-puncture source.  No transverse puncture-separation input is
+accepted.
+
+\subsection{Jacobian-regularized divergence form}
+
+Training does not use the raw expression in
+Eq.~\eqref{eq:hamiltonian-residual}.  For an orthogonal reference metric it
+uses the algebraically equivalent divergence form multiplied by $J$:
+\begin{equation}
+ \JRH=
+ \sum_{i\in\mathcal{D}}
+ \left[
+   \partial_i\!\left(J\hat\gamma^{ii}\right)u_{,i}
+   +J\hat\gamma^{ii}u_{,ii}
+ \right]
+ +J\frac{\mathcal{A}}{8}(\psi_{\rm bg}+u)^{-7}.
+ \label{eq:jrh}
+\end{equation}
+Here $\mathcal{D}=\{0,1\}$ for the axisymmetric solvers and
+$\mathcal{D}=\{0,1,2\}$ in 3D.  Multiplication by $J$ removes coordinate
+singular denominators algebraically.  The tests verify the identity
+$\JRH=J R_H$ away from coordinate singularities.
+
+The symbolic builders use NRPy to construct $J$, $\psi_{\rm bg}$, and
+$\mathcal{A}$ with a stable ordered symbol interface.  The 2D builders set
+NRPy's symmetry axis to direction 2 before constructing expressions, so all
+$xx2$ derivatives vanish symbolically rather than being discarded after
+generation.  SymPy \code{lambdify} produces cached NumPy and JAX callables.
+For a fixed collocation array, $\psi_{\rm bg}$ and $\mathcal{A}$ are evaluated
+once before optimization.  The derivatives of $u$ are still recomputed from
+the current network parameters by JAX at every loss evaluation.
+
+\section{Training and optimization}
+
+\subsection{Adam warm-up}
+
+The first stage uses Optax Adam with a cosine-decay learning-rate schedule
+from the configured initial rate to the configured minimum fraction.  Each
+gradient leaf is clipped elementwise to $[-c,c]$, where $c$ is the configured
+clip value.  The clipping is not a global gradient-norm rescaling.  The entire
+weighted loss, including every active boundary term, is differentiated in one
+\code{jax.value_and_grad} call.
+
+The checked schedules are summarized below.
+
+\begin{center}
+\begin{tabular}{lrrrr}
+\toprule
+Configuration & Adam steps & Initial rate & SSBroyden steps & $r_{\rm tol}=a_{\rm tol}$ \\
+\midrule
+T001 & 1,500 & $10^{-4}$ & 10,000 & $10^{-12}$ \\
+C002/C004 & 1,500 & $10^{-4}$ & 50,000 & $10^{-12}$ \\
+P001 & 1,500 & $10^{-4}$ & 50,000 & $10^{-12}$ \\
+C04 & 10,000 & $10^{-3}$ & 50,000 & $10^{-12}$ \\
+C05 & 0 & --- & 50,000 & $10^{-12}$ \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\subsection{Shared SSBroyden refinement}
+
+After Adam, each solver passes the same complete scalar loss to the shared
+SSBroyden runtime.  SSBroyden is a self-scaled member of the Broyden
+quasi-Newton family~\cite{bioli2026}.  It stores an inverse-Hessian
+approximation as a PyTree linear operator, uses a Newton descent with a
+Cholesky linear solver, and uses Optimistix's Zoom line search by default.
+The self-scaling parameters $\theta_k$ and $\tau_k$ are recomputed on accepted
+updates.  In the notation of the vendored implementation, its inverse-Hessian
+update has the form
+\begin{equation}
+ H_{k+1}=
+ \frac{1}{\tau_k}\left[
+ H_k-\frac{H_ky_ky_k^TH_k}{y_k^TH_ky_k}
+ +\phi_k(y_k^TH_ky_k)v_kv_k^T
+ \right]+\rho_ks_ks_k^T,
+ \label{eq:ssbroyden}
+\end{equation}
+where
+\begin{equation}
+ \rho_k=(y_k^Ts_k)^{-1},\qquad
+ v_k=\rho_ks_k-\frac{H_ky_k}{y_k^TH_ky_k},\qquad
+ \phi_k=\frac{1-\theta_k}{1+a_k\theta_k}.
+\end{equation}
+The relative and absolute tolerances are passed to Optimistix's Cauchy-style
+termination test; they are not direct target values for the PINN loss.
+
+The wrapper JIT-compiles the step and termination functions, counts accepted
+line-search steps, and supplies the accepted state's stored loss to callbacks.
+Each solver separately tracks the lowest accepted loss and returns those
+parameters, rather than assuming the last trial state is best.  Periodic
+checkpoints therefore store the current best accepted parameters.
+
+\subsection{Continuation semantics}
+
+Continuation restores only model parameters and scientific metadata.  Adam
+moments, SSBroyden inverse-Hessian state, and line-search state are not stored.
+A resumed stage creates a new optimizer state around the loaded model.  This
+is why collocation and optimizer settings may change between parent and child
+runs.  The child metadata records the SHA-256 digest of the parent checkpoint.
+
+\section{The one-dimensional spherical toy problem}
+
+\subsection{Equation and manufactured solution}
+
+The mass $m>0$ is selected by the TOML file.  The manufactured solution and
+singular background are
+\begin{equation}
+ u_{\rm exact}(r)=\frac{2m(1+r)}{r^2+2r+2},
+ \qquad
+ \psi(r)=1+\frac{m}{2r}.
+ \label{eq:toy-exact}
+\end{equation}
+The equation is
+\begin{equation}
+ R=u_{rr}+\frac{2}{r}u_r+
+ \frac{1}{8}A(r)[\psi(r)+u(r)]^{-7}=0,
+ \label{eq:toy-pde}
+\end{equation}
+with
+\begin{equation}
+ A(r)=
+ \frac{m(r^2+6r+6)
+ [2r(r^2+2r+2)+m(5r^2+6r+2)]^7}
+ {4r^7(r^2+2r+2)^{10}}.
+\end{equation}
+Although $A$ and $\psi$ are separately singular at the origin, the nonlinear
+combination is finite.  The loss evaluates the exactly equivalent expression
+\begin{equation}
+ N(r,u,m)=\frac{1}{8}A(\psi+u)^{-7}
+ =\frac{4m(r^2+6r+6)
+ [2r(r^2+2r+2)+m(5r^2+6r+2)]^7}
+ {(r^2+2r+2)^{10}[m+2r(1+u)]^7}.
+ \label{eq:toy-stable-source}
+\end{equation}
+The denominator is evaluated as written; the implementation does not clip or
+regularize it numerically.
+
+\subsection{Interior and origin terms}
+
+The interior points are the $Nxx0$ cell centers of $[xx0_{\min},xx0_{\max}]$.
+The trained residual is regularized by one power of physical radius:
+\begin{equation}
+ rR=r u_{rr}+2u_r+rN(r,u,m).
+ \label{eq:toy-regularized-residual}
+\end{equation}
+The coordinate origin is not an interior cell center.  It is evaluated
+separately at $xx0=0$, where the regularity residual is
+\begin{equation}
+ B_{\rm origin}=u_r(0).
+\end{equation}
+
+\subsection{Outer boundary operators}
+
+The TOML independently selects one operator and one enforcement region.  The
+\emph{first-order Robin} residual is
+\begin{equation}
+ B_1(r)=(1+r)(ru_r+u).
+ \label{eq:first-order-robin}
+\end{equation}
+It annihilates a leading $C/r$ profile.  The factor $(1+r)$ is part of the
+implemented residual and keeps the constraint scaled at large radius.
+
+The \emph{second-order Robin} residual is
+\begin{equation}
+ B_2(r)=r^3\left(u_r+\frac{u}{r}\right)-2m.
+ \label{eq:second-order-robin}
+\end{equation}
+It incorporates the known subleading term in
+\begin{equation}
+ u(r)=\frac{C}{r}-\frac{2m}{r^2}+\mathcal{O}(r^{-3}),
+\end{equation}
+without supplying $C$ to the network.
+
+The two enforcement regions are:
+\begin{description}[style=nextline]
+  \item[\code{endpoint}]
+    Evaluate the selected residual only at the explicit endpoint $xx0=1$.
+    The configuration must omit \code{outer_boundary_r_min}.
+  \item[\code{radial_band}]
+    Select every interior cell center whose mapped radius strictly satisfies
+    $r>r_{\min}^{\rm outer}$, then append the explicit $xx0=1$ endpoint.  Here
+    $r_{\min}^{\rm outer}$ is the value of
+    \code{outer_boundary_r_min}; it must satisfy
+    $0<r_{\min}^{\rm outer}<\mathrm{AMPL}$.
+\end{description}
+Thus the supported strategies are $B_1$ at the endpoint, $B_1$ on a radial
+band, $B_2$ at the endpoint, and $B_2$ on a radial band.  Exactly one strategy
+is active in a run.  The checked T001 configuration uses $B_2$ on the strict
+$r>10^3$ band plus the endpoint.
+
+\subsection{Total toy loss}
+
+Let $\mathcal{I}$ be the cell-centered interior set and $\mathcal{B}$ the
+selected outer set.  With $B$ equal to $B_1$ or $B_2$, the implemented loss is
+\begin{equation}
+ \mathcal{L}_{\rm toy}=
+ w_R\mean_{q\in\mathcal{I}}[rR(q)]^2
+ +w_0[u_r(0)]^2
+ +w_B\mean_{q\in\mathcal{B}}[B(q)]^2.
+ \label{eq:toy-loss}
+\end{equation}
+T001 sets all three weights to one, uses 256 cell-centered points, and uses a
+$[1,40,40,40,40,1]$ network.  The exact solution in
+Eq.~\eqref{eq:toy-exact} is not part of
+Eq.~\eqref{eq:toy-loss}; it is used only by tests and evaluation output.
+
+\section{Fixed axisymmetric punctures}
+
+\subsection{Inputs and collocation}
+
+The fixed 2D network consumes $(xx0,xx1)$.  Every physical source component is
+fixed by the selected TOML.  Interior samples form a flattened tensor product
+of $Nxx0$ and $Nxx1$ cell centers.  The checked fixed-2D configurations are:
+
+\begin{center}
+\begin{tabular}{llll}
+\toprule
+Configuration & Collocation & Architecture & Role \\
+\midrule
+C002 \code{w40d4} & $384\times192$ & $[2,40,40,40,40,1]$ & baseline \\
+C002 $70\times70$ & $70\times70$ & $[2,40,40,40,40,1]$ & lighter run \\
+C002 \code{w60d10} & $384\times192$ & 10 layers of width 60 & wider/deeper \\
+C004 square & $256\times256$ & $[2,40,40,40,40,1]$ & square grid \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\subsection{Boundary sample sets}
+
+Theta scalar parity is imposed with structured pairs at both polar
+boundaries.  For samples $(xx0,\delta)$,
+\begin{align}
+ E_{\rm lower} &=u(xx0,-\delta)-u(xx0,\delta),\\
+ E_{\rm upper} &=u(xx0,\pi+\delta)-u(xx0,\pi-\delta),\\
+ \mathcal{L}_{\theta} &=\frac12\left[
+ \mean E_{\rm lower}^2+\mean E_{\rm upper}^2\right].
+ \label{eq:2d-parity}
+\end{align}
+The $xx0$ and $\delta$ arrays are cell-centered and use $Nxx0\times Nxx1$
+samples; $\delta$ spans the configured near-axis interval.
+
+The outer samples set $xx0=xx0_{\max}$ and use $Nxx1$ cell centers in the
+polar coordinate.  Their scaled Robin residual is
+\begin{equation}
+ B_{\infty}=(1+r)(ru_r+u),
+ \qquad
+ \mathcal{L}_{\rm out}=\mean B_{\infty}^2,
+ \label{eq:puncture-robin}
+\end{equation}
+where $u_r$ is computed by Eq.~\eqref{eq:spherical-radial-derivative}.
+
+\subsection{Total fixed-2D loss}
+
+With $\mathcal{L}_{J}=\mean(\JRH)^2$, the fixed-2D loss is
+\begin{equation}
+ \mathcal{L}_{\rm 2D}=
+ w_J\mathcal{L}_{J}+w_{\theta}\mathcal{L}_{\theta}
+ +w_{\rm out}\mathcal{L}_{\rm out}.
+ \label{eq:fixed-2d-loss}
+\end{equation}
+All checked configurations set these weights to one.  Adam runs for 1,500
+steps at an initial rate of $10^{-4}$ and SSBroyden is allowed up to 50,000
+accepted steps.
+
+\section{Equal-spin parametric axisymmetric punctures}
+
+The parametric solver retains the same 2D SinhSymTP mapping, axisymmetric
+residual in Eq.~\eqref{eq:jrh}, scalar-parity pairs in
+Eq.~\eqref{eq:2d-parity}, and outer residual in
+Eq.~\eqref{eq:puncture-robin}.  Its distinction is the third model input
+\begin{equation}
+ s=\texttt{equal\_spin\_sz}.
+\end{equation}
+This is the raw physical Bowen--York $S_z$ component, not a dimensionless spin
+$\chi$.  For every source evaluation,
+\begin{equation}
+ S_{0z}=S_{1z}=s.
+\end{equation}
+The remaining source components are fixed by the TOML.
+
+P001 uses 80 cell centers in $s\in[-0.2,0.2]$ and a
+$128\times64$ native spatial grid.  The tensor product therefore contains
+$128\times64\times80$ interior residual points.  Each spatial parity and
+outer-boundary sample is likewise repeated at all 80 spin cell centers.  The
+parameter axis is not called \code{Nxx2}, because it is not a spatial
+SinhSymTP coordinate.
+
+The source builder substitutes $S_{0z}=S_{1z}=s$ before evaluating
+$\psi_{\rm bg}$ and $\mathcal{A}$.  JAX differentiates the model only with
+respect to $xx0$ and $xx1$ for the PDE; no derivative with respect to $s$
+appears in the elliptic residual.  With the checked
+\code{regularized_residual_scale} equal to one, the total loss is
+\begin{equation}
+ \mathcal{L}_{\rm param}=
+ w_J\mean\left(\frac{\JRH}{s_R}\right)^2
+ +w_{\theta}\mathcal{L}_{\theta}
+ +w_{\rm out}\mathcal{L}_{\rm out},
+ \qquad s_R=1.
+ \label{eq:parametric-loss}
+\end{equation}
+All checked weights are one.  P001 uses the
+$[3,40,40,40,40,1]$ network, 1,500 Adam steps at $10^{-4}$, and up to 50,000
+SSBroyden steps.
+
+At evaluation time the user supplies one fixed $s$ in the configured range.
+The returned field is a member of the trained parametric family, whereas a
+fixed-2D checkpoint represents only the single physical source encoded by its
+configuration.
+
+\section{Full three-dimensional punctures}
+
+\subsection{Interior residual and collocation}
+
+The 3D MLP consumes $(xx0,xx1,xx2)$, and Eq.~\eqref{eq:jrh} contains all three
+diagonal divergence terms.  The interior grid is the flattened tensor product
+of cell-centered arrays in each native direction.
+
+C04 uses $256\times256\times16$ samples with uniform $xx0$ cell centers over
+$[0,1]$.  It performs 10,000 Adam steps at initial rate $10^{-3}$ followed by
+up to 50,000 SSBroyden steps.  C05 must resume a compatible C04 checkpoint.
+It keeps $Nxx0=256$ but changes the radial-like sampling to two zones:
+\begin{itemize}[nosep]
+  \item 236 cell centers on $[0,0.5]$;
+  \item 20 cell centers on $[0.5,1]$.
+\end{itemize}
+C05 disables Adam and applies up to 50,000 new SSBroyden steps to the C04
+parameters on the changed collocation set.
+
+\subsection{Axis regularity}
+
+Axis samples form a structured product of $xx0$, a small positive $\delta$,
+and azimuth $\varphi$.  The code defines the wrapped antipodal angle
+\begin{equation}
+ \varphi_* = \operatorname{wrap}_{[-\pi,\pi)}(\varphi+\pi)
+ =[(\varphi+2\pi)\bmod 2\pi]-\pi.
+\end{equation}
+The lower and upper residuals are
+\begin{align}
+ E_{0} &=u(xx0,-\delta,\varphi_*)-u(xx0,\delta,\varphi),\\
+ E_{\pi} &=u(xx0,\pi+\delta,\varphi_*)
+            -u(xx0,\pi-\delta,\varphi),\\
+ \mathcal{L}_{\rm axis}&=\frac12
+ \left[\mean E_0^2+\mean E_{\pi}^2\right].
+ \label{eq:3d-axis-loss}
+\end{align}
+The checked configurations sample $xx0$ from
+\code{boundary_xx0_min} to the outer endpoint, $\delta$ from
+\code{xx1_axis_delta_min} to \code{xx1_axis_delta_max}, and azimuth without a
+duplicated endpoint.
+
+\subsection{Azimuthal periodicity and outer boundary}
+
+For a structured $(xx0,xx1)$ set away from the polar coordinate singularity,
+\begin{equation}
+ \mathcal{L}_{\varphi}=\mean
+ \left[u(xx0,xx1,xx2_{\max})-u(xx0,xx1,xx2_{\min})\right]^2.
+ \label{eq:phi-periodicity}
+\end{equation}
+The outer samples set $xx0=xx0_{\max}$ and form a product of polar points
+away from the axes and azimuthal points without a duplicated endpoint.  They
+use the same $B_{\infty}$ and $\mathcal{L}_{\rm out}$ as
+Eq.~\eqref{eq:puncture-robin}.
+
+\subsection{Total 3D loss}
+
+The implemented objective is
+\begin{equation}
+ \mathcal{L}_{\rm 3D}=\mean(\JRH)^2
+ +w_{\rm axis}\mathcal{L}_{\rm axis}
+ +w_{\varphi}\mathcal{L}_{\varphi}
+ +w_{\rm out}\mathcal{L}_{\rm out}.
+ \label{eq:3d-loss}
+\end{equation}
+C04 and C05 set the three boundary weights to one.  The interior coefficient
+is fixed to one in the 3D loss implementation.
+
+\section{Checkpoints and evaluation}
+
+\subsection{Atomic NPZ format}
+
+Every solver writes \path{checkpoint_final.npz}; stage checkpoints use names
+such as \path{checkpoint_adam_00001000.npz} and
+\path{checkpoint_ssbroyden_00001000.npz}.  Checkpoint schema 1 contains
+\begin{itemize}[nosep]
+  \item float64 arrays \code{leaf_000}, \code{leaf_001}, and so on, in stable
+        $W_0,b_0,W_1,b_1,\ldots$ order; and
+  \item \code{metadata_json}, a one-dimensional \code{uint8} array containing
+        UTF-8 JSON.
+\end{itemize}
+Loading uses \code{allow_pickle=False}.  Array count, shape, dtype, finiteness,
+and contiguous leaf names are validated.  Saving writes a temporary file in
+the destination directory, flushes it, and atomically replaces the requested
+path.  Pickle checkpoint compatibility is intentionally absent.
+
+Resume validation treats dtype, geometry, physics, architecture, and ansatz as
+immutable.  The parametric solver additionally treats its declared parameter
+range as immutable.  Loss choices, collocation, and optimizer-stage settings
+are metadata but may change on continuation.  The child records
+\code{parent_checkpoint_sha256}, allowing an external workflow to reconstruct
+the parameter lineage.
+
+\subsection{Explicit evaluation}
+
+The shared dispatcher is
+\begin{lstlisting}[language=bash]
+python -m pinndorama.reproducibility.evaluate SOLVER \
+  --config CONFIG.toml --checkpoint CHECKPOINT.npz \
+  --coords COORDS --output OUTPUT
+\end{lstlisting}
+where \code{SOLVER} is one of
+\begin{center}
+\code{toy-problem-1d},\quad
+\code{punctures-2d},\quad
+\code{punctures-2d-parametric},\quad
+\code{punctures-3d}.
+\end{center}
+The parametric form also requires \code{--equal-spin-sz}.  The dispatcher
+invokes the selected solver evaluator in a subprocess using the same Python
+interpreter.
+
+Coordinate files contain native coordinates, either as text columns or as an
+NPZ with exactly the expected named arrays.  The toy evaluator writes
+$xx0,r,u_{\rm NN},u_{\rm exact}$ and pointwise errors.  Puncture evaluators
+write the native point, mapped Cartesian coordinates, and $u_{\rm NN}$.
+Every checkpoint, coordinate file, output, and physics configuration is
+explicit; no cluster path or bundled result is assumed.
+
+\section{Vendored dependencies}
+
+\subsection{NRPy symbolic construction}
+
+\path{vendor/nrpy/} is an ordinary-file snapshot of the upstream NRPy
+repository~\cite{ruchlin2018}.  Its provenance records
+\begin{itemize}[nosep]
+  \item upstream URL \url{https://github.com/nrpy/nrpy};
+  \item commit
+        \code{4d16f0e35ce90a50b87508088d2dfcf744aa65b9};
+  \item upstream release \code{2.2026.6}; and
+  \item snapshot date 2026-07-10.
+\end{itemize}
+The upstream Git metadata is excluded, but the source snapshot is otherwise
+kept separate from Pinndorama adaptations.
+
+The central path resolver exposes \code{NRPY_ROOT}.  Each puncture symbolic
+builder prepends that directory before importing NRPy reference-metric and
+NRPyElliptic source modules.  The fixed-2D builder additionally checks
+\code{nrpy.__file__} and rejects a module outside the vendored root.  The
+parametric and 3D builders rely on the prepended central path, while the
+symbolic-builder tests run each package in a fresh process and verify the
+pinned source-symbol contract.  This behavior is intentionally stated
+precisely: NRPy loading is not authenticated by the same common loader used
+for SSBroyden.
+
+The toy problem does not import NRPy at runtime.  Its small SinhSpherical map
+is implemented directly and tested against the pinned formula.  The puncture
+solvers use NRPy only to construct symbolic expressions and numerical
+callables; training does not download code or regenerate C applications.
+
+\subsection{Shared SSBroyden and Optimistix runtime}
+
+\path{vendor/ssbroyden/} contains a single runtime shared by all four neural
+solvers:
+\begin{itemize}[nosep]
+  \item \path{ssbroyden_family.py}, from
+        \url{https://github.com/IvanBioli/ssbroyden_optimistix} commit
+        \code{4c87785c68f0fec6b09000f474daef76fb181eea};
+  \item \path{optimistix_wrapper.py}, the accepted-step manual loop; and
+  \item \path{optimistix/}, from the required Optimistix fork, declaring
+        version \code{0.1.0}.  Its pinned commit is
+        \path{8cd4931713658f8dfe4423ead6f11b348b675540}.
+\end{itemize}
+These are ordinary files rather than submodules, so the optimizer remains
+available if the upstream repositories disappear.
+
+The loader prepends both vendor roots, invalidates import caches, imports
+Optimistix, the wrapper, and the SSBroyden family, and then verifies every
+module's \code{__file__} lies beneath the expected vendor directory.  It also
+requires \code{optimistix.__version__ == "0.1.0"}, rejecting an ambient
+installation or version mismatch.  Optimistix reports that constant directly
+instead of querying installed distribution metadata, so no separate editable
+Optimistix installation is required.
+
+Local adaptations recorded in \path{VENDORED_FROM.md} are the normalized
+\path{ssbroyden_family.py} filename, accepted-state loss reuse in the wrapper,
+the deterministic Optimistix version constant, and formatting-only changes.
+\path{SHA256SUMS} covers the active runtime files and is checked by tests.  The
+nested Optimistix snapshot retains its Apache-2.0 license.  The SSBroyden
+add-on had no separate license at the pinned commit; written redistribution
+permission is pending, and Pinndorama does not assign one.
+
+\section{NRPyElliptic reference workflow}
+
+Standalone NRPyElliptic C applications are stored under
+\path{reference_solvers/nrpyelliptic/}.  Its axisymmetric subtree contains the
+axisymmetric reference application.  Its three-dimensional subtree contains
+the standard 3D application, the canonical comparison reader, and a
+parametric-network warm-start variant.  These programs build in their own
+directories and are not part of the Python installation.  NRPyElliptic's
+hyperbolic-relaxation method is described in Ref.~\cite{assumpcao2022}.
+
+The canonical reader has a path-neutral interface
+\begin{lstlisting}[language=bash]
+nrpyell_reader --binary FILE --coords FILE --output FILE
+\end{lstlisting}
+and consumes Cartesian $x,y,z$ points.  It reads the versioned
+\code{NRPYELL3} binary format and interpolates the $u$ field with a
+tensor-product stencil using nine source points in each native direction.  It
+is the comparison reader for both axisymmetric and 3D neural solutions.
+
+An NRPy solution header does not encode every Bowen--York source parameter.
+The Python workflow therefore requires a reference TOML stored beside the
+binary.  That file records the binary name and SHA-256, all SinhSymTP geometry,
+and all source parameters.  The comparison rejects a changed digest, geometry
+inconsistent with the binary header, or physics inconsistent with the solver
+TOML.
+
+Given neural values $u_{\rm NN}^{(a)}$, interpolated reference values
+$u_{\rm NRPy}^{(a)}$, and explicit nonnegative volume weights $w_a$, the
+reported metric is
+\begin{equation}
+ \epsilon_{L_2}=
+ \sqrt{
+ \frac{\sum_a w_a\left(u_{\rm NN}^{(a)}-u_{\rm NRPy}^{(a)}\right)^2}
+      {\sum_a w_a\left(u_{\rm NRPy}^{(a)}\right)^2}}
+ .
+ \label{eq:relative-l2}
+\end{equation}
+The arrays must have identical nonzero size, all entries must be finite, at
+least one weight must be positive, and the weighted reference norm must be
+nonzero.
+
+The optional warm-start C application accepts \code{initial_guess = zero} or
+\code{initial_guess = parametric_nn}; restart data takes precedence.  No
+weights are embedded.  The \code{make nn-header CHECKPOINT=...} target exports
+a user-supplied P001-compatible $[3,40,40,40,40,1]$ checkpoint.  Before the
+OpenMP initialization loop, the C code validates geometry, fixed source
+parameters, equal raw spins, and the exported spin range.
+
+\section{Representative commands}
+
+The following commands illustrate the supported interfaces.  They require an
+editable Pinndorama installation and write only to the explicit destinations.
+
+\subsection*{Training}
+
+\begin{lstlisting}[language=bash]
+python -m pinndorama.solvers.toy_problem_1d.train \
+  --config configs/toy_problem_1d/T001_w40d4.toml \
+  --output-dir runs/T001_w40d4
+
+python -m pinndorama.solvers.punctures_2d.train \
+  --config configs/punctures_2d/C002_w40d4.toml \
+  --output-dir runs/C002_w40d4
+
+python -m pinndorama.solvers.punctures_2d_parametric.train \
+  --config configs/punctures_2d_parametric/P001_w40d4.toml \
+  --output-dir runs/P001_w40d4
+
+python -m pinndorama.solvers.punctures_3d.train \
+  --config configs/punctures_3d/C04.toml \
+  --output-dir runs/C04
+
+python -m pinndorama.solvers.punctures_3d.train \
+  --config configs/punctures_3d/C05.toml \
+  --output-dir runs/C05 \
+  --resume-checkpoint runs/C04/checkpoint_final.npz
+\end{lstlisting}
+
+\subsection*{Evaluation and comparison}
+
+\begin{lstlisting}[language=bash]
+python -m pinndorama.reproducibility.evaluate punctures-3d \
+  --config configs/punctures_3d/C04.toml \
+  --checkpoint runs/C04/checkpoint_final.npz \
+  --coords /path/to/native_xx.txt \
+  --output /path/to/checkpoint_values.txt
+
+make -C reference_solvers/nrpyelliptic/three_dimensional/\
+READER_nrpyelliptic_conformally_flat
+
+python -m pinndorama.reproducibility.create_reference \
+  --binary /path/to/NRPYELL_solution.bin \
+  --solver-config configs/punctures_3d/C04.toml \
+  --output /path/to/NRPYELL_solution.reference.toml
+
+python -m pinndorama.reproducibility.compare \
+  --nrpy-binary /path/to/NRPYELL_solution.bin \
+  --reference-config /path/to/NRPYELL_solution.reference.toml \
+  --solver-config configs/punctures_3d/C04.toml \
+  --coords /path/to/cartesian_xyz.txt \
+  --nn-values /path/to/checkpoint_values.txt \
+  --volume-weights /path/to/quadrature_weights.txt \
+  --output /path/to/comparison.json
+\end{lstlisting}
+
+\section{Implementation boundaries}
+
+This reference describes the active code paths and checked configurations.
+The four solvers share conventions but remain separate implementations; a
+change in one package does not automatically alter the others.  Cluster
+launchers, machine-specific paths, implicit artifact searches, and bundled
+paper-scale results are outside these modules.
+
+\begin{thebibliography}{9}
+
+\bibitem{ruchlin2018}
+I. Ruchlin, Z. B. Etienne, and T. W. Baumgarte,
+``SENR/NRPy+: Numerical relativity in singular curvilinear coordinate
+systems,''
+\emph{Physical Review D} \textbf{97}, 064036 (2018).
+\href{https://doi.org/10.1103/PhysRevD.97.064036}
+{doi:10.1103/PhysRevD.97.064036}.
+
+\bibitem{assumpcao2022}
+T. Assumpcao, L. R. Werneck, T. P. Jacques, and Z. B. Etienne,
+``Fast hyperbolic relaxation elliptic solver for numerical relativity:
+Conformally flat, binary puncture initial data,''
+\emph{Physical Review D} \textbf{105}, 104037 (2022).
+\href{https://doi.org/10.1103/PhysRevD.105.104037}
+{doi:10.1103/PhysRevD.105.104037}.
+
+\bibitem{bioli2026}
+I. Bioli and M. Mendibe Abarrategi,
+``Self-Scaled Broyden Family of Quasi-Newton Methods in JAX,''
+arXiv:2603.10599 (2026).
+\url{https://arxiv.org/abs/2603.10599}.
+
+\bibitem{optimistix}
+P. Kidger and contributors,
+``Optimistix: nonlinear optimization in JAX,'' software project.
+The Pinndorama runtime uses the fork and commit recorded in
+\path{vendor/ssbroyden/VENDORED_FROM.md}.
+\url{https://github.com/patrick-kidger/optimistix}.
+
+\end{thebibliography}
+
+\end{document}
