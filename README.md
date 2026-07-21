@@ -30,11 +30,11 @@ training stages, checkpoints, and vendored dependencies, see the standalone
 
 ## Installation
 
-Clone the repository and create a Python 3.12 virtual environment (Python 3.11
-is also supported):
+Clone [assumpcaothiago/Pinndorama](https://github.com/assumpcaothiago/Pinndorama)
+and create a Python 3.12 virtual environment (Python 3.11 is also supported):
 
 ```bash
-git clone <pinndorama-repository-url>
+git clone https://github.com/assumpcaothiago/Pinndorama.git
 cd Pinndorama
 
 python3.12 -m venv .venv
