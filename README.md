@@ -49,8 +49,11 @@ dependencies declared in `pyproject.toml`. SSBroyden and the required modified
 Optimistix runtime are already stored under `vendor/ssbroyden/`; they do not
 need a separate installation or a network download.
 
-The default dependency set uses platform-neutral JAX. Follow
-[the GPU JAX guide](docs/gpu-jax.md) when installing for an accelerator.
+On Linux x86-64, the default dependency set installs JAX with its bundled CUDA
+12 runtime libraries. The host still supplies the NVIDIA driver, but a separate
+CUDA toolkit or cuDNN module is not required. Other platforms retain the
+platform-neutral JAX dependency. See [the GPU JAX guide](docs/gpu-jax.md) for
+device validation and guidance on avoiding conflicts with system CUDA modules.
 
 ## Solvers and configurations
 

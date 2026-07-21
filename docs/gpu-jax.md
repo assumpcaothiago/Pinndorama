@@ -1,18 +1,30 @@
-# Platform-specific GPU JAX installation
+# GPU-enabled JAX installation
 
-The root project metadata intentionally depends on the platform-neutral `jax`
-package. CUDA/ROCm wheel selection depends on the host driver, accelerator,
-and package index and must not be encoded in publication configurations.
+The default editable installation selects `jax[cuda12]` on Linux x86-64. This
+installs matching pip-managed CUDA 12 runtime libraries, including cuDNN,
+cuBLAS, cuSPARSE, and NCCL, together with the JAX CUDA plugin. The machine must
+still provide a compatible NVIDIA driver, but a separately loaded CUDA toolkit
+or cuDNN module is not required.
 
-Start with a supported Python 3.11 or 3.12 virtual environment and install the
-repository's non-JAX dependencies. Then follow the current accelerator-specific
-command in
-the [official JAX installation documentation](https://docs.jax.dev/en/latest/installation.html)
-for the machine being used. Only after that should the remaining project
-dependencies be installed without allowing the package manager to replace the
-selected JAX build.
+Create a supported Python 3.11 or 3.12 virtual environment and install the
+repository normally:
 
-Before a run, record:
+```bash
+python -m pip install --upgrade pip
+python -m pip install -e .
+```
+
+Do not load system CUDA or cuDNN modules into the same runtime environment.
+Their libraries can take precedence over the pip-managed copies and cause
+version mismatches. In particular, a JAX plugin compiled for a newer cuDNN
+minor release cannot run against an older module-provided cuDNN library.
+
+On non-Linux-x86-64 platforms, the same installation command selects
+platform-neutral JAX. Alternative accelerator stacks should follow the current
+accelerator-specific instructions in the
+[official JAX installation documentation](https://docs.jax.dev/en/latest/installation.html).
+
+Validate the installation inside an allocated GPU compute job and record:
 
 ```bash
 python -c 'import jax; print(jax.__version__, jax.devices())'
@@ -20,6 +32,6 @@ python -m pip freeze
 ```
 
 The solver enables `jax_enable_x64` and rejects a non-float64 checkpoint. A GPU
-being visible is not sufficient: verify that float64 is supported and that the
-reported device is the intended accelerator. CPU-only validation remains the
-portable baseline used by the repository test suite.
+being visible is not sufficient: execute at least one float64 operation and
+verify that the reported device is the intended accelerator. CPU-only
+validation remains the portable baseline used by the repository test suite.

@@ -131,8 +131,15 @@ def test_root_metadata_has_supported_python_bounds() -> None:
     assert project["optional-dependencies"]["test"] == ["pytest>=8,<9"]
     dependencies = project["dependencies"]
     assert "black==26.5.1" in dependencies
+    assert (
+        "jax[cuda12]>=0.4.38,<0.7; platform_system == 'Linux' and "
+        "platform_machine == 'x86_64'"
+    ) in dependencies
+    assert (
+        "jax>=0.4.38,<0.7; platform_system != 'Linux' or "
+        "platform_machine != 'x86_64'"
+    ) in dependencies
     for package in (
-        "jax",
         "optax",
         "equinox",
         "lineax",
