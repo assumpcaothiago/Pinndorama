@@ -174,6 +174,8 @@ def test_all_public_python_modules_import_through_pinndorama() -> None:
     for solver in ("punctures_2d", "punctures_2d_parametric", "punctures_3d"):
         for suffix in module_suffixes:
             importlib.import_module(f"pinndorama.solvers.{solver}.{suffix}")
+    for suffix in ("plot_relative_l2_convergence", "relative_l2_nrpy"):
+        importlib.import_module(f"pinndorama.solvers.punctures_2d.{suffix}")
     for suffix in (
         "checkpoint",
         "config",
@@ -183,6 +185,9 @@ def test_all_public_python_modules_import_through_pinndorama() -> None:
         "loss",
         "model",
         "plot_error",
+        "plot_pointwise_relative_error",
+        "plot_relative_l2_convergence",
+        "relative_l2",
         "ssbroyden_trainer",
         "train",
     ):

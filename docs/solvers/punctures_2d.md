@@ -53,5 +53,58 @@ python -m pinndorama.solvers.punctures_2d.evaluate \
   --output /path/to/predictions.txt
 ```
 
+Compare a directory of final checkpoints with an authenticated three-dimensional
+NRPyElliptic reference on one independent cell-centered grid:
+
+```bash
+OMP_NUM_THREADS=8 python -m pinndorama.solvers.punctures_2d.relative_l2_nrpy \
+  --config configs/punctures_2d/C004_square_w40d4.toml \
+  --grid-mode common \
+  --Nxx0 760 \
+  --Nxx1 760 \
+  --radius 7.5 \
+  --output /path/to/relative_l2_common.tsv \
+  /path/to/checkpoint/root
+```
+
+Use `--grid-mode native` to evaluate each checkpoint on its own training grid.
+In either mode, points from every required unique grid are concatenated and sent
+to the canonical nine-point reader in one invocation. The native-grid reference
+values are then reused across checkpoints with matching resolutions. The metric
+is the volume-weighted relative `L2` norm, with weights
+`sqrt(det(gamma_hat))*dxx0*dxx1`, restricted by default to `r<7.5M`.
+Checkpoint inference uses the equivalent NumPy forward pass, so this
+postprocessing command does not initialize JAX or require a GPU.
+
+The default binary is
+`reference_solvers/nrpyelliptic/nrpyelliptic_conformally_flat_symmetricID/NRPYELL_solution.bin`.
+Its authenticated `NRPYELL_solution.reference.toml` must be stored beside it.
+Create that metadata after generating the binary:
+
+```bash
+python -m pinndorama.reproducibility.create_reference \
+  --binary reference_solvers/nrpyelliptic/nrpyelliptic_conformally_flat_symmetricID/NRPYELL_solution.bin \
+  --solver-config configs/punctures_2d/C004_square_w40d4.toml \
+  --output reference_solvers/nrpyelliptic/nrpyelliptic_conformally_flat_symmetricID/NRPYELL_solution.reference.toml
+```
+
+The binary, authenticated reference metadata, interpolation scratch files, and
+result TSV are analysis artifacts and are not part of the source distribution.
+
+Generate seed-resolved and aggregate convergence figures from a common-grid
+comparison TSV:
+
+```bash
+python -m pinndorama.solvers.punctures_2d.plot_relative_l2_convergence \
+  --input /path/to/relative_l2_common.tsv \
+  --output-prefix /path/to/c004_convergence
+```
+
+The plotting command requires one coherent common evaluation grid and rejects
+mixed reference hashes, radii, sample counts, or incomplete seed sets. It writes
+seed-curve and median/interquartile figures as PDF and PNG, together with a
+per-resolution summary TSV and a JSON provenance record. These generated files
+are analysis artifacts and remain outside the source repository.
+
 The three configs capture C002 `w40d4`, C002 `w60d10`, and the C004 square-grid
 `w40d4` anchor. They contain only the upstream `zPunc` separation model.

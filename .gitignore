@@ -21,6 +21,9 @@ venv_*/
 *.txt
 *.dat
 *.bin
+reference_solvers/nrpyelliptic/**/NRPYELL_solution.reference.toml
+reference_solvers/nrpyelliptic/**/nrpyell_reader
+reference_solvers/nrpyelliptic/**/nrpyelliptic_conformally_flat
 loss_report*.json
 *_loss_report.json
 /NRPyElliptic_2d_C_codes/nrpyelliptic_conformally_flat/nrpyelliptic_conformally_flat

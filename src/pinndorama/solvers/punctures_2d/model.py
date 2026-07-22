@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import math
 
+import numpy as np
+
 from . import config, coordinates
 
 
@@ -85,3 +87,35 @@ def forward(
         xp=jnp,
     )
     return raw_out / jnp.sqrt(1.0 + r_sph * r_sph)
+
+
+def forward_numpy(
+    params,
+    x,
+    *,
+    amax: float = config.AMAX,
+    bscale: float = config.bScale,
+    sinhwaa: float = config.SINHWAA,
+) -> np.ndarray:
+    """Evaluate a trained checkpoint without initializing the JAX runtime."""
+
+    native_x = np.asarray(x, dtype=np.float64)
+    if native_x.ndim != 2 or native_x.shape[1] != 2:
+        raise ValueError("model input must have shape (N, 2)")
+    hidden = native_x
+    for layer in params[:-1]:
+        weight = np.asarray(layer["W"], dtype=np.float64)
+        bias = np.asarray(layer["b"], dtype=np.float64)
+        hidden = np.tanh(hidden @ weight.T + bias)
+    final_weight = np.asarray(params[-1]["W"], dtype=np.float64)
+    final_bias = np.asarray(params[-1]["b"], dtype=np.float64)
+    raw_out = hidden @ final_weight.T + final_bias
+    radius = coordinates.spherical_radius_from_xx(
+        native_x[:, 0:1],
+        native_x[:, 1:2],
+        amax=amax,
+        bscale=bscale,
+        sinhwaa=sinhwaa,
+        xp=np,
+    )
+    return raw_out / np.sqrt(1.0 + radius * radius)
