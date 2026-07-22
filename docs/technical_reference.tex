@@ -916,7 +916,7 @@ python -m pinndorama.reproducibility.evaluate punctures-3d \
   --coords /path/to/native_xx.txt \
   --output /path/to/checkpoint_values.txt
 
-make -C reference_solvers/nrpyelliptic/three_dimensional/\
+make -C reference_solvers/nrpyelliptic/\
 READER_nrpyelliptic_conformally_flat
 
 python -m pinndorama.reproducibility.create_reference \

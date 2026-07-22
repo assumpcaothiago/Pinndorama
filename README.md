@@ -153,12 +153,12 @@ not search for cluster files or bundled results.
 
 ## NRPyElliptic comparison
 
-Build the standard reference solvers and the canonical 9-point reader with:
+Build the two full-3D reference examples and the canonical 9-point reader with:
 
 ```bash
-make -C reference_solvers/nrpyelliptic/axisymmetric/nrpyelliptic_conformally_flat
-make -C reference_solvers/nrpyelliptic/three_dimensional/nrpyelliptic_conformally_flat
-make -C reference_solvers/nrpyelliptic/three_dimensional/READER_nrpyelliptic_conformally_flat
+make -C reference_solvers/nrpyelliptic/nrpyelliptic_conformally_flat_symmetricID
+make -C reference_solvers/nrpyelliptic/nrpyelliptic_conformally_flat_3D
+make -C reference_solvers/nrpyelliptic/READER_nrpyelliptic_conformally_flat
 ```
 
 NRPy solution binaries do not record every source parameter. Before comparing

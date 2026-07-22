@@ -17,7 +17,6 @@ WARM_DIR = (
     REPO_ROOT
     / "reference_solvers"
     / "nrpyelliptic"
-    / "three_dimensional"
     / "nrpyelliptic_conformally_flat_symmetricID-NN_guess"
 )
 EXPORTER = WARM_DIR / "generate_parametric_nn_weights_header.py"

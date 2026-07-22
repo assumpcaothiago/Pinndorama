@@ -90,7 +90,7 @@ def main() -> int:
     if not reader.is_file():
         raise FileNotFoundError(
             f"canonical reader not found at {reader}; build it with "
-            "`make -C reference_solvers/nrpyelliptic/three_dimensional/"
+            "`make -C reference_solvers/nrpyelliptic/"
             "READER_nrpyelliptic_conformally_flat`"
         )
 

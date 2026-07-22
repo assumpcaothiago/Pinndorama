@@ -16,7 +16,6 @@ READER_DIR = (
     REPO_ROOT
     / "reference_solvers"
     / "nrpyelliptic"
-    / "three_dimensional"
     / "READER_nrpyelliptic_conformally_flat"
 )
 PHYSICS = {

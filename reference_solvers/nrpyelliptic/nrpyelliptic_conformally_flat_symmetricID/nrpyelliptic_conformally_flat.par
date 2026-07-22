@@ -1,0 +1,40 @@
+#### Axisymmetric physical test on a full 3D SinhSymTP grid. ####
+#### Physics matches configs/punctures_2d/C004_square_w40d4.toml. ####
+###########################
+### Hyperbolic-relaxation parameters
+eta_damping = 70.0                 # (REAL)
+MINIMUM_GLOBAL_WAVESPEED = 0.7     # (REAL)
+###########################
+### Bowen--York two-puncture source parameters
+P0_x = 0.0                         # (REAL)
+P0_y = 0.0                         # (REAL)
+P0_z = 0.0                         # (REAL)
+P1_x = 0.0                         # (REAL)
+P1_y = 0.0                         # (REAL)
+P1_z = 0.0                         # (REAL)
+S0_x = 0.0                         # (REAL)
+S0_y = 0.0                         # (REAL)
+S0_z = 0.2                         # (REAL)
+S1_x = 0.0                         # (REAL)
+S1_y = 0.0                         # (REAL)
+S1_z = -0.15                       # (REAL)
+bare_mass_0 = 0.5                  # (REAL)
+bare_mass_1 = 0.5                  # (REAL)
+zPunc = 2.5                        # (REAL)
+###########################
+### Boundary conditions and time integration
+outer_bc_type = "radiation"        # (char[50])
+CFL_FACTOR = 1.0                   # (REAL)
+t_final = 1000000.0                # (REAL)
+###########################
+### Checkpointing, diagnostics, and stopping conditions
+checkpoint_every = 50.0            # (REAL)
+diagnostics_output_every = 1000     # (int)
+output_progress_every = 1          # (int)
+log10_current_residual = 1.0       # (REAL)
+log10_residual_tolerance = -15.1   # (REAL)
+nn_max = 20000                     # (int)
+stop_relaxation = False            # (bool)
+###########################
+### Grid convergence control
+convergence_factor = 1.0           # (REAL)

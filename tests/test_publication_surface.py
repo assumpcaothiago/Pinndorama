@@ -217,7 +217,6 @@ def test_comparison_reader_uses_reference_solver_hierarchy() -> None:
         REPO_ROOT
         / "reference_solvers"
         / "nrpyelliptic"
-        / "three_dimensional"
         / "READER_nrpyelliptic_conformally_flat"
         / "nrpyell_reader"
     )

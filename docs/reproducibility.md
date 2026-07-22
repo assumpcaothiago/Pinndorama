@@ -29,7 +29,7 @@ solver configuration describes a different problem.
 Build the only active interpolation reader:
 
 ```bash
-make -C reference_solvers/nrpyelliptic/three_dimensional/READER_nrpyelliptic_conformally_flat
+make -C reference_solvers/nrpyelliptic/READER_nrpyelliptic_conformally_flat
 ```
 
 Evaluate an explicit user-supplied checkpoint through the shared dispatcher.
