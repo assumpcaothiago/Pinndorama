@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import math
 
+import numpy as np
+
 from . import config, coordinates
 
 
@@ -57,3 +59,21 @@ def forward(params, x, *, ampl: float, sinhw: float):
     raw = hidden @ params[-1]["W"].T + params[-1]["b"]
     radius = coordinates.radius_from_xx0(native[:, 0:1], ampl=ampl, sinhw=sinhw, xp=jnp)
     return raw / jnp.sqrt(1.0 + radius * radius)
+
+
+def forward_numpy(params, x, *, ampl: float, sinhw: float) -> np.ndarray:
+    """Evaluate the trained model with NumPy for lightweight postprocessing."""
+
+    native = np.asarray(x, dtype=np.float64)
+    if native.ndim != 2 or native.shape[1] != 1:
+        raise ValueError("model input must have shape (N, 1)")
+    hidden = native
+    for layer in params[:-1]:
+        weight = np.asarray(layer["W"], dtype=np.float64)
+        bias = np.asarray(layer["b"], dtype=np.float64)
+        hidden = np.tanh(hidden @ weight.T + bias)
+    final_weight = np.asarray(params[-1]["W"], dtype=np.float64)
+    final_bias = np.asarray(params[-1]["b"], dtype=np.float64)
+    raw = hidden @ final_weight.T + final_bias
+    radius = coordinates.radius_from_xx0(native[:, 0:1], ampl=ampl, sinhw=sinhw, xp=np)
+    return raw / np.sqrt(1.0 + radius * radius)

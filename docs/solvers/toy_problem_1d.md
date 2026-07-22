@@ -188,3 +188,89 @@ python -m pinndorama.solvers.toy_problem_1d.plot_error \
 The plotter omits samples with zero radius, zero relative error, or nonfinite
 values because they cannot be represented on logarithmic axes. It does not
 modify the evaluator's text output.
+
+## Relative-L2 convergence analysis
+
+Evaluate one checkpoint, multiple explicit checkpoint files, or every
+`checkpoint_final.npz` below one or more directories on a new cell-centered
+grid:
+
+```bash
+python -m pinndorama.solvers.toy_problem_1d.relative_l2 \
+  --Nxx0 8192 \
+  --output /path/to/relative_l2.tsv \
+  /path/to/run-or-campaign-directory
+```
+
+Here `--Nxx0` is the evaluation resolution. It is independent of the
+collocation resolution stored in each checkpoint. The output records both as
+`evaluation_Nxx0` and `training_Nxx0`.
+
+The command reports how many checkpoints were found and prints progress for
+each evaluation, including its training resolution, seed, and relative error.
+Pass `--quiet` to suppress these progress messages in automated workflows.
+
+To evaluate every checkpoint at the exact cell-centered points used for its
+training resolution, replace `--Nxx0 8192` with `--use-training-points`:
+
+```bash
+python -m pinndorama.solvers.toy_problem_1d.relative_l2 \
+  --use-training-points \
+  --output /path/to/relative_l2_training_points.tsv \
+  /path/to/run-or-campaign-directory
+```
+
+In this mode, `evaluation_Nxx0` equals `training_Nxx0` in every output row.
+The unweighted normalized relative norm is otherwise unchanged.
+
+The reported `relative_l2_w1` is the unweighted discrete relative norm on the
+uniform native-coordinate grid,
+
+$$
+\epsilon_{L^2,w=1}
+=
+\left[
+\frac{\sum_i \left(u_{\rm NN}(\mathrm{xx}_{0,i})
+                         -u_{\rm exact}(\mathrm{xx}_{0,i})\right)^2}
+     {\sum_i u_{\rm exact}(\mathrm{xx}_{0,i})^2}
+\right]^{1/2}.
+$$
+
+It is a normalized RMSE in computational-coordinate space, not a
+physical-volume-weighted spherical norm. All checkpoints in one invocation
+must share the same coordinate map, physical parameters, output transform,
+and native-coordinate interval so their errors are directly comparable.
+
+Plot all seed values together with the mean, median, and interquartile range:
+
+```bash
+python -m pinndorama.solvers.toy_problem_1d.plot_relative_l2_convergence \
+  --input /path/to/relative_l2.tsv \
+  --output-prefix /path/to/relative_l2_convergence
+```
+
+This writes `.png` and `.pdf` figures plus a `_summary.tsv` table containing
+the run count, seed count, mean, median, standard deviation, extrema, and
+quartiles at each training resolution.
+
+## Pointwise error by training resolution
+
+To inspect where the solution error is concentrated, select one seed and
+several training resolutions and evaluate all of them on the same independent
+cell-centered grid:
+
+```bash
+python -m pinndorama.solvers.toy_problem_1d.plot_pointwise_relative_error \
+  --resolutions 80,152,224,296,380 \
+  --seed 503 \
+  --evaluation-Nxx0 760 \
+  --output-prefix /path/to/pointwise_relative_error_seed503 \
+  /path/to/campaign-directory
+```
+
+The command produces log-log `.png` and `.pdf` figures, a wide `.tsv` table
+containing the exact solution, each NN solution, and each pointwise relative
+error, and a `.json` provenance record with checkpoint paths and SHA-256
+hashes. Optional `--r-min` and `--r-max` arguments restrict the plotted radial
+range without changing the common evaluation table. Exactly one checkpoint
+must match each requested `(training resolution, seed)` pair.

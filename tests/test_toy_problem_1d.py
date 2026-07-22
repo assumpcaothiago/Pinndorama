@@ -17,6 +17,7 @@ from pinndorama.solvers.toy_problem_1d import (
     loss,
     model,
     plot_error,
+    relative_l2,
 )
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -357,6 +358,13 @@ def test_model_falloff_and_boundary_losses_use_physical_radius() -> None:
     )
     values = np.asarray(model.forward(params, xx0, ampl=ampl, sinhw=sinhw))[:, 0]
     assert np.allclose(values, 2.0 / np.sqrt(1.0 + radius * radius))
+    numpy_params = [
+        {"W": np.asarray(layer["W"]), "b": np.asarray(layer["b"])} for layer in params
+    ]
+    numpy_values = model.forward_numpy(
+        numpy_params, np.asarray(xx0), ampl=ampl, sinhw=sinhw
+    )[:, 0]
+    assert np.allclose(numpy_values, values, rtol=1.0e-14, atol=0.0)
     assert float(loss.origin_regularity_loss(params, ampl=ampl, sinhw=sinhw)) == (
         pytest.approx(0.0, abs=1.0e-28)
     )
@@ -464,6 +472,23 @@ def test_toy_checkpoint_resume_and_evaluation(tmp_path: Path) -> None:
     assert np.all(table[:, 3] > 0.0)
     assert np.all(table[:, 4] == table[:, 3])
     assert np.all(table[:, 5] == 1.0)
+
+    records = relative_l2.analyze_checkpoints([legacy_parent], evaluation_Nxx0=17)
+    assert len(records) == 1
+    record = records[0]
+    assert record["training_Nxx0"] == 256
+    assert record["evaluation_Nxx0"] == 17
+    assert record["relative_l2_w1"] == pytest.approx(1.0)
+    assert record["rms_absolute_error"] == pytest.approx(record["rms_exact"])
+    assert record["max_pointwise_relative_error"] == pytest.approx(1.0)
+    summary = relative_l2.write_summary(records, tmp_path / "relative_l2.tsv")
+    header = summary.read_text(encoding="utf-8").splitlines()[0]
+    assert "training_Nxx0" in header
+    assert "evaluation_Nxx0" in header
+    assert "relative_l2_w1" in header
+    assert relative_l2.discover_checkpoints(
+        [tmp_path], checkpoint_name="parent.npz"
+    ) == [parent.resolve()]
 
 
 def test_toy_relative_error_loglog_plot(tmp_path: Path) -> None:
